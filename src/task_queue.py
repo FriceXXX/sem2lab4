@@ -1,30 +1,73 @@
+import asyncio
+
 from typing import List, Iterator, Optional
 
 from src.task_filters import TaskFilter
 from .task import Task
+from src.logger import default_logger as logger
 
 
 class TaskQueue:
-    def __init__(self, tasks: Optional[List[Task]] = None):
+    def __init__(self, tasks: Optional[List[Task]] = None, maxsize: int = 0):
         self._tasks: List[Task] = []
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self._logger = logger
+        self.is_stopped = False
 
         if tasks:
             for task in tasks:
-                self.add_task(task)
+                self.put_nowait(task)
 
-    def add_task(self, task: Task) -> None:
+    async def put(self, task: Task):
+        await self._queue.put(task)
         self._tasks.append(task)
+        self._logger.debug(f"put {task.id} async. size = {self.qsize()}")
 
-    def add_tasks(self, tasks: List[Task]) -> None:
+    def put_nowait(self, task: Task):
+        self._tasks.append(task)
+        self._queue.put_nowait(task)
+        self._logger.debug(f"put {task.id} nowait. size = {self.qsize()}")
+
+
+    async def put_tasks(self, tasks: List[Task]) -> None:
         for task in tasks:
-            self.add_task(task)
+            await self._queue.put(task)
+            self._tasks.append(task)
+            self._logger.debug(f"put {task.id} async. size = {self.qsize()}")
+
+    async def get(self) -> Task:
+        if self.is_stopped:
+            raise ValueError("Task queue is stopped")
+        if self.empty():
+            raise asyncio.QueueEmpty("Task queue is empty")
+
+        task = await self._queue.get()
+        self._logger.debug(f"get {task.id} async. size = {self.qsize()}")
+        return task
+
+    def get_nowait(self) -> Task:
+        task = self._queue.get_nowait()
+        self._logger.debug(f"get {task.id} nowait. size = {self.qsize()}")
+        return task
 
     def remove_task(self, task_id: str) -> Optional[Task]:
         for i, task in enumerate(self._tasks):
             if task.id == task_id:
                 removed = self._tasks.pop(i)
+                self._logger.info(f"remove {removed.id}. size = {self.qsize()}")
                 return removed
         return None
+
+    def clear(self) -> None:
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+                self._queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        self._tasks.clear()
+        self._logger.info(f"queue {self._queue.qsize()} cleared. size = {self.qsize()}")
 
     def filter(self, *filters: TaskFilter) -> Iterator[Task]:
         if not filters:
@@ -46,6 +89,40 @@ class TaskQueue:
                 return task
         return None
 
+    def full(self) -> bool:
+        return self._queue.full()
+
+    def empty(self) -> bool:
+        return self._queue.empty()
+
+    def qsize(self) -> int:
+        return self._queue.qsize()
+
+    async def stop(self) -> None:
+        self.is_stopped = True
+        self._logger.info("queue is stopped")
+
+    def is_stopped(self) -> bool:
+        return self.is_stopped
+
+    async def join(self) -> None:
+        await self._queue.join()
+        self._logger.info("All tasks done")
+
+    def task_done(self) -> None:
+        self._queue.task_done()
+
+    async def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            if self.is_stopped or self.empty():
+                raise StopAsyncIteration
+            return await self.get()
+        except asyncio.QueueEmpty:
+            raise StopAsyncIteration
+
     def __len__(self) -> int:
         return len(self._tasks)
 
@@ -57,6 +134,8 @@ class TaskQueue:
 
     def __repr__(self):
         return f"TaskQueue(tasks={self._tasks[:3]}...)" if len(self._tasks) > 3 else f"TaskQueue(tasks={self._tasks})"
+
+
 
     def status_filter(self, status: str) -> Iterator[Task]:
         for task in self._tasks:

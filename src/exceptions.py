@@ -24,3 +24,19 @@ class InvalidStateTransitionError(TaskError):
 class TaskAlreadyCompletedError(TaskError):
     """Исключение при попытке изменить завершённую задачу"""
     pass
+
+class ExecutorError(Exception):
+    """Базовое исключение исполнителя задач."""
+    pass
+
+class TaskProcessingError(ExecutorError):
+    """Ошибка при обработке конкретной задачи."""
+    # from src.task import Task
+    # def __init__(self, task: Task, cause: Exception):
+    #     self.task = task
+    #     self.cause = cause
+    #     super().__init__(f"[{task.id}] {cause}")
+
+class ExecutorNotStartedError(ExecutorError):
+    """Попытка использовать исполнитель до запуска."""
+    pass
